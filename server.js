@@ -1,14 +1,51 @@
+//ayuda documentacion https://www.passportjs.org/packages/  https://www.youtube.com/watch?app=desktop&v=Q0a0594tOrc
+
 const express = require('express');//indico que voy a usar express
 const app = express();
 const port = 3000; //indico el puerto 3000
 const mysql = require('mysql2'); //estamos usando mysql
-
 const swaggerSetup = require('./swagger.js');
 swaggerSetup(app);
 
 const jwt = require("jsonwebtoken");
+const passport = require('passport');
 const falsoSecreto = "}.18|v6e>U~eU#'C~-48jNGdF}{O|*" // es ideal que esto NO esté en el codigo
 
+
+const db = mysql.createConnection({
+  host: 'localhost', /* '172.17.131.5' */
+  user: 'Munch',
+  password: 'Yucines',
+  database: 'mydb',
+});
+
+app.use(express.json());//usaremos formato json
+
+//google Oauth 2.0
+require('./oauth.js');
+app.get('/auth/google',
+  passport.authenticate('google', {scope: ['email', 'profile']})
+)
+app.get('/google/callback',
+  passport.authenticate('google', {
+    successRedirect: '/success',
+    failureRedirect: '/auth/failure',
+  })
+)
+app.get('/',(req,res) =>{
+res.send('<a href ="/auth/google"> Autentificate con google</a>');
+})
+function isLoggedIn(req,res,next) {
+  req.user ? next(): res.sendStatus(401);
+}
+app.get('/auth/failure', (req, res) => { 
+  res.send('Algo ha ido mal');
+})
+app.get('/success', isLoggedIn, (req, res) => { 
+  res.send('Hola');
+})
+
+///////////////////////////////////////////////////////////////////////////////////////////
 app.post("/token", (req, res) => { //creamos un endpoint para el token
   //aqui deberiamos recoger un usuario de la base de datos
   //solo si hay un usuario deberia recibir un token por ahora lo hardcodeo
@@ -24,10 +61,10 @@ app.post("/token", (req, res) => { //creamos un endpoint para el token
   res.send({ token });//lo enviamos como un objeto json
 })
 
-app.get("/public", (req, res) => {
+/* app.get("/public", (req, res) => {
   res.send("Soy publico");
-})
-app.get("/private", (req, res) => {
+}) */
+/* app.get("/private", (req, res) => {
   try {//debo recoger el token de la autorizacion
     const token = req.headers.authorization.split(" ")[1];
     const payload = jwt.verify(token, falsoSecreto);
@@ -40,16 +77,8 @@ app.get("/private", (req, res) => {
     res.status(401).send({ error: error.message });
   }
 
-})
+}) */
 
-const db = mysql.createConnection({
-  host: 'localhost', /* '172.17.131.5' */
-  user: 'Munch',
-  password: 'Yucines',
-  database: 'mydb',
-});
-
-app.use(express.json());//usaremos formato json
 
 /**
  * @swagger
