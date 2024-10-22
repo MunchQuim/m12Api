@@ -1,16 +1,23 @@
 //ayuda documentacion https://www.passportjs.org/packages/  https://www.youtube.com/watch?app=desktop&v=Q0a0594tOrc
 
-const express = require('express');//indico que voy a usar express
+const express = require('express');
+const session = require('express-session');
+const passport = require('passport');
+require('./oauth.js');
+
 const app = express();
+
+app.use(session({ secret: 'cats', resave: false, saveUninitialized: true }));
+app.use(passport.initialize());
+app.use(passport.session());
+
 const port = 3000; //indico el puerto 3000
 const mysql = require('mysql2'); //estamos usando mysql
 const swaggerSetup = require('./swagger.js');
 swaggerSetup(app);
 
 const jwt = require("jsonwebtoken");
-const passport = require('passport');
 const falsoSecreto = "}.18|v6e>U~eU#'C~-48jNGdF}{O|*" // es ideal que esto NO esté en el codigo
-
 
 const db = mysql.createConnection({
   host: 'localhost', /* '172.17.131.5' */
@@ -22,29 +29,41 @@ const db = mysql.createConnection({
 app.use(express.json());//usaremos formato json
 
 //google Oauth 2.0
-require('./oauth.js');
+
 app.get('/auth/google',
-  passport.authenticate('google', {scope: ['email', 'profile']})
+  passport.authenticate('google', { scope: ['email', 'profile'] })
 )
-app.get('/google/callback',
+app.get('/auth/google/callback',
   passport.authenticate('google', {
     successRedirect: '/success',
     failureRedirect: '/auth/failure',
   })
 )
-app.get('/',(req,res) =>{
-res.send('<a href ="/auth/google"> Autentificate con google</a>');
+app.get('/', (req, res) => {
+  res.send('<a href ="/auth/google"> Autentificate con google</a>');
 })
-function isLoggedIn(req,res,next) {
-  req.user ? next(): res.sendStatus(401);
+function isLoggedIn(req, res, next) {
+  req.user ? next() : res.sendStatus(401);
 }
-app.get('/auth/failure', (req, res) => { 
+app.get('/auth/failure', (req, res) => {
   res.send('Algo ha ido mal');
 })
-app.get('/success', isLoggedIn, (req, res) => { 
-  res.send('Hola');
+app.get('/success', isLoggedIn, (req, res) => {
+  res.send(`Hello ${req.user.displayName}`);
 })
-
+app.get('/logout', (req, res) => {
+  req.logout((err) => {
+    if (err) {
+      return res.status(500).send('Error logging out');
+    }
+    req.session.destroy((err) => {
+      if (err) {
+        return res.status(500).send('Error destroying session');
+      }
+      res.send('Goodbye!');
+    });
+  });
+});
 ///////////////////////////////////////////////////////////////////////////////////////////
 app.post("/token", (req, res) => { //creamos un endpoint para el token
   //aqui deberiamos recoger un usuario de la base de datos
@@ -61,24 +80,18 @@ app.post("/token", (req, res) => { //creamos un endpoint para el token
   res.send({ token });//lo enviamos como un objeto json
 })
 
-/* app.get("/public", (req, res) => {
-  res.send("Soy publico");
-}) */
-/* app.get("/private", (req, res) => {
-  try {//debo recoger el token de la autorizacion
-    const token = req.headers.authorization.split(" ")[1];
-    const payload = jwt.verify(token, falsoSecreto);
-    if (Date.now() > payload.exp) {//nos aseguramos que el token no haya expirado
-      return res.status(401).send({ error: "token expired" });
-    } else {
-      res.send("Soy privado");
-    }
-  } catch (error) {
-    res.status(401).send({ error: error.message });
-  }
+//middleware token
+function authenticateJWT(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.sendStatus(401);
 
-}) */
-
+  const token = authHeader.split(" ")[1];
+  jwt.verify(token, falsoSecreto, (err, user) => {
+    if (err) return res.sendStatus(403);
+    req.user = user; // Guarda el usuario en la solicitud
+    next();
+  });
+}
 
 /**
  * @swagger
@@ -92,25 +105,15 @@ app.post("/token", (req, res) => { //creamos un endpoint para el token
  *         description: Error al obtener usuarios
  */
 
-app.get('/api/users', (req, res) => {
-  try {//debo recoger el token de la autorizacion
-    const token = req.headers.authorization.split(" ")[1];
-    const payload = jwt.verify(token, falsoSecreto);
-    if (Date.now() > payload.exp) {//nos aseguramos que el token no haya expirado
-      return res.status(401).send({ error: "token expired" });
+app.get('/api/users', authenticateJWT, (req, res) => {
+  db.query('SELECT * FROM usuarios', (err, results) => {
+    if (err) {
+      console.error('Error al obtener usuarios:', err);
+      res.status(500).json({ error: 'Error al obtener usuarios' });
     } else {
-      db.query('SELECT * FROM usuarios', (err, results) => {
-        if (err) {
-          console.error('Error al obtener usuarios:', err);
-          res.status(500).json({ error: 'Error al obtener usuarios' });
-        } else {
-          res.json({ usuarios: results });
-        }
-      })
+      res.json({ usuarios: results });
     }
-  } catch (error) {
-    res.status(401).send({ error: error.message });
-  }
+  })
 })
 
 /**
@@ -134,31 +137,22 @@ app.get('/api/users', (req, res) => {
  *         description: Error al obtener usuario
  */
 
-app.get("/api/user/:id", (req, res) => {
-  try {//debo recoger el token de la autorizacion
-    const token = req.headers.authorization.split(" ")[1];
-    const payload = jwt.verify(token, falsoSecreto);
-    if (Date.now() > payload.exp) {//nos aseguramos que el token no haya expirado
-      return res.status(401).send({ error: "token expired" });
+app.get("/api/user/:id", authenticateJWT, (req, res) => {
+  const userId = req.params.id;
+  db.query('SELECT * FROM usuarios where idUsuario = ?', [userId], (err, results) => {
+    if (err) {
+      console.error('Error al obtener usuarios:', err);
+      res.status(500).json({ error: 'Error al obtener usuarios' });
     } else {
-      const userId = req.params.id;//debe coincidir con este
-      db.query('SELECT * FROM usuarios where idUsuario = ?', [userId], (err, results) => {
-        if (err) {
-          console.error('Error al obtener usuarios:', err);
-          res.status(500).json({ error: 'Error al obtener usuarios' });
-        } else {
-          if (results.length === 0) {
-            res.status(404).json({ message: 'Usuario no encontrado' })//404 quiere decir que no se ha devuelto nada
-          }
-          res.json({ usuario: results[0] });//el primer elemento porque vienen un un json con solo un elemento
-        }
-      })
+      if (results.length === 0) {
+        res.status(404).json({ message: 'Usuario no encontrado' })//404 quiere decir que no se ha devuelto nada
+      }
+      res.json({ usuario: results[0] });//el primer elemento porque vienen un un json con solo un elemento
     }
-  } catch (error) {
-    res.status(401).send({ error: error.message });
-  }
+  })
 
 })
+
 
 /* {
     "userName": "JaviCopia",
@@ -195,27 +189,16 @@ app.get("/api/user/:id", (req, res) => {
  *         description: Error al crear el usuario
  */
 
-app.post('/api/user', (req, res) => {
-  try {//debo recoger el token de la autorizacion
-    const token = req.headers.authorization.split(" ")[1];
-    const payload = jwt.verify(token, falsoSecreto);
-    if (Date.now() > payload.exp) {//nos aseguramos que el token no haya expirado
-      return res.status(401).send({ error: "token expired" });
+app.post('/api/user', authenticateJWT, (req, res) => {
+  const newUser = req.body;
+  db.query('INSERT INTO usuarios (userName, userPassword, fechaNacimiento, wantPromo) VALUES (?, ?, ?, ?)', [newUser.userName, newUser.userPassword, newUser.fechaNacimiento, newUser.wantPromo], (err, results) => {
+    if (err) {
+      console.error('Error al crear el usuario:', err);
+      res.status(500).json({ error: 'Error al crear el usuario' });
     } else {
-      const newUser = req.body;
-      db.query('INSERT INTO usuarios (userName, userPassword, fechaNacimiento, wantPromo) VALUES (?, ?, ?, ?)', [newUser.userName, newUser.userPassword, newUser.fechaNacimiento, newUser.wantPromo], (err, results) => {
-        if (err) {
-          console.error('Error al crear el usuario:', err);
-          res.status(500).json({ error: 'Error al crear el usuario' });
-        } else {
-          res.json({ message: 'Usuario creado con éxito', usuario: newUser });
-        }
-      });
+      res.json({ message: 'Usuario creado con éxito', usuario: newUser });
     }
-  } catch (error) {
-    res.status(401).send({ error: error.message });
-  }
-
+  });
 })
 
 /* {
@@ -303,29 +286,18 @@ app.post('/api/user', (req, res) => {
  *         description: Error al actualizar el usuario
  */
 
-app.put('/api/user/:id', (req, res) => {
-  try {//debo recoger el token de la autorizacion
-    const token = req.headers.authorization.split(" ")[1];
-    const payload = jwt.verify(token, falsoSecreto);
-    if (Date.now() > payload.exp) {//nos aseguramos que el token no haya expirado
-      return res.status(401).send({ error: "token expired" });
+app.put('/api/user/:id', authenticateJWT, (req, res) => {
+  const userId = req.params.id;
+  const updatedUser = req.body;
+  db.query('UPDATE usuarios SET userName = ?, userPassword = ?, fechaNacimiento = ?, urlImagen = ?, urlBanner = ?, wantPromo = ? WHERE idUsuario = ?', [updatedUser.userName, updatedUser.userPassword, updatedUser.fechaNacimiento, updatedUser.urlImage, updatedUser.urlBanner, updatedUser.wantPromo, userId], (err, results) => {
+
+    if (err) {
+      console.error('Error al actualizar el usuario:', err);
+      res.status(500).json({ error: 'Error al actualizar el usuario' });
     } else {
-      const userId = req.params.id;
-      const updatedUser = req.body;
-      db.query('UPDATE usuarios SET userName = ?, userPassword = ?, fechaNacimiento = ?, urlImagen = ?, urlBanner = ?, wantPromo = ? WHERE idUsuario = ?', [updatedUser.userName, updatedUser.userPassword, updatedUser.fechaNacimiento, updatedUser.urlImage, updatedUser.urlBanner, updatedUser.wantPromo, userId], (err, results) => {
-
-        if (err) {
-          console.error('Error al actualizar el usuario:', err);
-          res.status(500).json({ error: 'Error al actualizar el usuario' });
-        } else {
-          res.json({ message: 'Usuario actualizado con exito', usuario: updatedUser });
-        }
-      });
+      res.json({ message: 'Usuario actualizado con exito', usuario: updatedUser });
     }
-  } catch (error) {
-    res.status(401).send({ error: error.message });
-  }
-
+  });
 })
 
 
@@ -357,28 +329,17 @@ app.put('/api/user/:id', (req, res) => {
  *         description: Error al eliminar el usuario
  */
 
-app.get('/api/user/:id', (req, res) => {
-  try {//debo recoger el token de la autorizacion
-    const token = req.headers.authorization.split(" ")[1];
-    const payload = jwt.verify(token, falsoSecreto);
-    if (Date.now() > payload.exp) {//nos aseguramos que el token no haya expirado
-      return res.status(401).send({ error: "token expired" });
+app.delete('/api/user/:id', authenticateJWT, (req, res) => {
+  const userId = req.params.id;
+  db.query('DELETE FROM usuarios where idUsuario = ?', [userId], (err, results) => {
+    if (err) {
+      console.error('Error al eliminar el usuario:', err);
+      res.status(500).json({ error: 'Error al eliminar usuarios' });
     } else {
-      const userId = req.params.id;
-      db.query('DELETE FROM usuarios where idUsuario = ?', [userId], (err, results) => {
-        if (err) {
-          console.error('Error al eliminar el usuario:', err);
-          res.status(500).json({ error: 'Error al eliminar usuarios' });
-        } else {
 
-          res.json({ message: 'Usuario eliminado con éxito' });
-        }
-      })
+      res.json({ message: 'Usuario eliminado con éxito' });
     }
-  } catch (error) {
-    res.status(401).send({ error: error.message });
-  }
-
+  })
 })
 
 
@@ -569,28 +530,17 @@ app.get('/api/peliculas/:id', (req, res) => {
  *         description: Error al crear la película
  */
 
-app.post('/api/peliculas', (req, res) => {
-  try {//debo recoger el token de la autorizacion
-    const token = req.headers.authorization.split(" ")[1];
-    const payload = jwt.verify(token, falsoSecreto);
-    if (Date.now() > payload.exp) {//nos aseguramos que el token no haya expirado
-      return res.status(401).send({ error: "token expired" });
+app.post('/api/peliculas', authenticateJWT, (req, res) => {
+
+  const newPelicula = req.body;
+  db.query('INSERT INTO peliculas (nombrePelicula, duracion, fechaEstreno, enEmision, sinopsis) VALUES (?, ?, ?, ?, ?)', [newPelicula.nombrePelicula, newPelicula.duracion, newPelicula.fechaEstreno, newPelicula.enEmision, newPelicula.sinopsis], (err, results) => {
+    if (err) {
+      console.error('Error al crear la pelicula:', err);
+      res.status(500).json({ error: 'Error al crear la pelicula' });
     } else {
-
-      const newPelicula = req.body;
-      db.query('INSERT INTO peliculas (nombrePelicula, duracion, fechaEstreno, enEmision, sinopsis) VALUES (?, ?, ?, ?, ?)', [newPelicula.nombrePelicula, newPelicula.duracion, newPelicula.fechaEstreno, newPelicula.enEmision, newPelicula.sinopsis], (err, results) => {
-        if (err) {
-          console.error('Error al crear la pelicula:', err);
-          res.status(500).json({ error: 'Error al crear la pelicula' });
-        } else {
-          res.json({ message: 'Pelicula añadida con exito', pelicula: newPelicula });
-        }
-      });
+      res.json({ message: 'Pelicula añadida con exito', pelicula: newPelicula });
     }
-  } catch (error) {
-    res.status(401).send({ error: error.message });
-  }
-
+  });
 })
 
 
@@ -661,28 +611,17 @@ app.post('/api/peliculas', (req, res) => {
  *         description: Error al actualizar la película
  */
 // Ruta para actualizar una pelicula por su ID
-app.put('/api/peliculas/:id', (req, res) => {
-  try {//debo recoger el token de la autorizacion
-    const token = req.headers.authorization.split(" ")[1];
-    const payload = jwt.verify(token, falsoSecreto);
-    if (Date.now() > payload.exp) {//nos aseguramos que el token no haya expirado
-      return res.status(401).send({ error: "token expired" });
+app.put('/api/peliculas/:id', authenticateJWT,(req, res) => {
+  const idPelicula = req.params.id;
+  const updatedPelicula = req.body;
+  db.query('UPDATE peliculas SET nombrePelicula = ?, duracion = ?, fechaEstreno = ?, enEmision = ?, sinopsis = ? WHERE idPelicula = ?', [updatedPelicula.nombrePelicula, updatedPelicula.duracion, updatedPelicula.fechaEstreno, updatedPelicula.enEmision, updatedPelicula.sinopsis, idPelicula], (err, results) => {
+    if (err) {
+      console.error('Error al actualizar pelicula:', err);
+      res.status(500).json({ error: 'Error al actualizar pelicula' });
     } else {
-      const idPelicula = req.params.id;
-      const updatedPelicula = req.body;
-      db.query('UPDATE peliculas SET nombrePelicula = ?, duracion = ?, fechaEstreno = ?, enEmision = ?, sinopsis = ? WHERE idPelicula = ?', [updatedPelicula.nombrePelicula, updatedPelicula.duracion, updatedPelicula.fechaEstreno, updatedPelicula.enEmision, updatedPelicula.sinopsis, idPelicula], (err, results) => {
-        if (err) {
-          console.error('Error al actualizar pelicula:', err);
-          res.status(500).json({ error: 'Error al actualizar pelicula' });
-        } else {
-          res.json({ message: 'Pelicula actualizada con exito', pelicula: updatedPelicula });
-        }
-      });
+      res.json({ message: 'Pelicula actualizada con exito', pelicula: updatedPelicula });
     }
-  } catch (error) {
-    res.status(401).send({ error: error.message });
-  }
-
+  });
 })
 
 
@@ -714,26 +653,16 @@ app.put('/api/peliculas/:id', (req, res) => {
  *         description: Error al eliminar la película
  */
 // Ruta para eliminar una pelicula por su ID
-app.delete('/api/peliculas/:id', (req, res) => {
-  try {//debo recoger el token de la autorizacion
-    const token = req.headers.authorization.split(" ")[1];
-    const payload = jwt.verify(token, falsoSecreto);
-    if (Date.now() > payload.exp) {//nos aseguramos que el token no haya expirado
-      return res.status(401).send({ error: "token expired" });
+app.delete('/api/peliculas/:id',authenticateJWT, (req, res) => {
+  const idPelicula = req.params.id;
+  db.query('DELETE FROM peliculas WHERE idPelicula = ?', [idPelicula], (err, results) => {
+    if (err) {
+      console.error('Error al eliminar pelicula:', err);
+      res.status(500).json({ error: 'Error al eliminar la pelicula' });
     } else {
-      const idPelicula = req.params.id;
-      db.query('DELETE FROM peliculas WHERE idPelicula = ?', [idPelicula], (err, results) => {
-        if (err) {
-          console.error('Error al eliminar pelicula:', err);
-          res.status(500).json({ error: 'Error al eliminar la pelicula' });
-        } else {
-          res.json({ message: 'Pelicula eliminada con exito' });
-        }
-      });
+      res.json({ message: 'Pelicula eliminada con exito' });
     }
-  } catch (error) {
-    res.status(401).send({ error: error.message });
-  }
+  });
 })
 
 // Inicia el servidor
