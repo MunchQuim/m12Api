@@ -34,11 +34,29 @@ app.get('/auth/google',
   passport.authenticate('google', { scope: ['email', 'profile'] })
 )
 app.get('/auth/google/callback',
-  passport.authenticate('google', {
-    successRedirect: '/success',
-    failureRedirect: '/auth/failure',
-  })
-)
+  passport.authenticate('google', { failureRedirect: '/auth/failure' }),
+  async (req, res) => {
+    const fetch = (await import('node-fetch')).default;
+
+    const data = {
+      var1: 'valor1',//estos valores deberian ser algunas credenciales de la cuenta de google que guardar como usuario en la 
+                    //bbdd y usar como el sub y el name para crear el token .
+      var2: 'valor2',
+    };
+
+    try {
+      const response = await fetch('http://localhost:3000/token', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+      const result = await response.json();
+      res.json(result);
+    } catch (error) {
+      console.error('Error:', error);
+      res.sendStatus(500);
+    }
+  }
+);
 app.get('/', (req, res) => {
   res.send('<a href ="/auth/google"> Autentificate con google</a>');
 })
@@ -49,7 +67,16 @@ app.get('/auth/failure', (req, res) => {
   res.send('Algo ha ido mal');
 })
 app.get('/success', isLoggedIn, (req, res) => {
-  res.send(`Hello ${req.user.displayName}`);
+  const { var1: sub, var2: name } = req.user;
+  const token = jwt.sign({
+    sub,
+    name,
+    exp: Math.floor(Date.now() / 1000) + 60
+  },
+    falsoSecreto//esto es la clave de encriptado
+  );
+  res.json({ message: 'Login successful', token });
+  res.send(token);
 })
 app.get('/logout', (req, res) => {
   req.logout((err) => {
@@ -69,14 +96,14 @@ app.post("/token", (req, res) => { //creamos un endpoint para el token
   //aqui deberiamos recoger un usuario de la base de datos
   //solo si hay un usuario deberia recibir un token por ahora lo hardcodeo
   const { idUsuario: sub, userName: name } = { idUsuario: 1, userName: "Javi" };// lo renombro para que coincida con el payload
+
   const token = jwt.sign({
     sub,
     name,
-    exp: Date.now() + 60 * 1 * 1000
+    exp: Math.floor(Date.now() / 1000) + 60
   },
     falsoSecreto//esto es la clave de encriptado
   );
-
   res.send({ token });//lo enviamos como un objeto json
 })
 
@@ -611,7 +638,7 @@ app.post('/api/peliculas', authenticateJWT, (req, res) => {
  *         description: Error al actualizar la película
  */
 // Ruta para actualizar una pelicula por su ID
-app.put('/api/peliculas/:id', authenticateJWT,(req, res) => {
+app.put('/api/peliculas/:id', authenticateJWT, (req, res) => {
   const idPelicula = req.params.id;
   const updatedPelicula = req.body;
   db.query('UPDATE peliculas SET nombrePelicula = ?, duracion = ?, fechaEstreno = ?, enEmision = ?, sinopsis = ? WHERE idPelicula = ?', [updatedPelicula.nombrePelicula, updatedPelicula.duracion, updatedPelicula.fechaEstreno, updatedPelicula.enEmision, updatedPelicula.sinopsis, idPelicula], (err, results) => {
@@ -653,7 +680,7 @@ app.put('/api/peliculas/:id', authenticateJWT,(req, res) => {
  *         description: Error al eliminar la película
  */
 // Ruta para eliminar una pelicula por su ID
-app.delete('/api/peliculas/:id',authenticateJWT, (req, res) => {
+app.delete('/api/peliculas/:id', authenticateJWT, (req, res) => {
   const idPelicula = req.params.id;
   db.query('DELETE FROM peliculas WHERE idPelicula = ?', [idPelicula], (err, results) => {
     if (err) {
